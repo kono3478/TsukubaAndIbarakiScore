@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ランダム早押し 総合タイムアタック</title>
   
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -32,11 +31,8 @@
     }
   </script>
 
-  <!-- React & ReactDOM -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  
-  <!-- Babel for JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
@@ -49,127 +45,127 @@
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzh5jBYcjcMucp6RdW5Mc_J2ucAhHUEd6MJWsJXLBhcgfdn7U6EQzI6HRmhFSfHTKi8/exec';
 
     // --- ゲーム設定 ---
-    const WORDS_COUNT = 10;
-    const PENALTY_MS = 1000; 
-    const RADIUS = 35; 
-    const SAFE_MARGIN = 55; 
+    const WORDS_COUNT  = 10;
+    const PENALTY_MS   = 1000;
+    const RADIUS       = 35;
+    const SAFE_MARGIN  = 55;
     const TOTAL_ROUNDS = 15;
 
-    // 探す対象とダミーのペア
     const GAME_PAIRS = [
       { target: '筑波', dummy: '茨城' },
       { target: '茨城', dummy: '筑波' }
     ];
 
-    // 音声ファイルの設定 (GitHubのraw URLに変換して使用)
-    const okSound = new Audio('https://raw.githubusercontent.com/kono3478/sozai/main/OK.mp3');
-    const noSound = new Audio('https://raw.githubusercontent.com/kono3478/sozai/main/NO.mp3');
+    const okSound  = new Audio('https://raw.githubusercontent.com/kono3478/sozai/main/OK.mp3');
+    const noSound  = new Audio('https://raw.githubusercontent.com/kono3478/sozai/main/NO.mp3');
     const bgmSound = new Audio('https://raw.githubusercontent.com/kono3478/BGM/main/ThinkingTime.mp3');
-    bgmSound.loop = true; // BGMをループ再生に設定
+    bgmSound.loop = true;
+
+    // ラウンド順序からdisplayモード名を取得
+    const getDisplayMode = (round) => {
+      if (round < 5)  return { label: '整列',         stage: 1, current: round + 1,     key: 'grid'   };
+      if (round < 10) return { label: 'ランダム',     stage: 2, current: round - 4,     key: 'random' };
+      return              { label: '動く',           stage: 3, current: round - 9,     key: 'moving' };
+    };
 
     function App() {
-      // 初期状態でランダムにゲーム内容を決定
-      const getRandomPair = () => GAME_PAIRS[Math.floor(Math.random() * GAME_PAIRS.length)];
-      const [currentPair, setCurrentPair] = useState(getRandomPair());
+      // ===== ゲームフェーズ管理 =====
+      // start → playing → between → playing → result
+      const [gamePhase, setGamePhase]   = useState('start');
+      const gamePhaseRef                = useRef('start');
+      const setPhase = (p) => { setGamePhase(p); gamePhaseRef.current = p; };
 
-      const [gameState, setGameState] = useState('start'); 
-      const [currentRound, setCurrentRound] = useState(0); 
-      const [time, setTime] = useState(0);
-      const [errorId, setErrorId] = useState(null);
-      const [successId, setSuccessId] = useState(null); // 正解時のIDを保持するステートを追加
-      
-      // ハイスコアは両方のゲームで個別に管理
+      // ===== モード管理 =====
+      // 最初にシャッフルして順番を決定
+      const [pairOrder, setPairOrder]   = useState(() => {
+        const pairs = [...GAME_PAIRS];
+        return Math.random() < 0.5 ? pairs : [pairs[1], pairs[0]];
+      });
+      const [currentGameIndex, setCurrentGameIndex] = useState(0); // 0=1戦目, 1=2戦目
+
+      // ===== ラウンド内状態 =====
+      const [currentRound, setCurrentRound] = useState(0);
+      const [time,         setTime]          = useState(0);
+      const [errorId,      setErrorId]       = useState(null);
+      const [successId,    setSuccessId]     = useState(null);
+
+      // ===== ハイスコア =====
       const [highScores, setHighScores] = useState({ '筑波': null, '茨城': null });
-      const [isNewRecord, setIsNewRecord] = useState(false);
-      const [playerName, setPlayerName] = useState('');
-      const [submitStatus, setSubmitStatus] = useState('idle'); // idle | sending | done | error
 
-      const containerRef = useRef(null);
-      const gameStateRef = useRef('start'); 
-      const modeRef = useRef('grid'); 
-      const wordsRef = useRef([]); 
-      const animationRef = useRef(null);
-      const startTimeRef = useRef(0);
-      const penaltyRef = useRef(0);
+      // ===== リザルト =====
+      const [playerName,    setPlayerName]   = useState('');
+      const [submitStatus,  setSubmitStatus] = useState('idle');
 
-      // ローカルストレージからハイスコアを読み込む
+      // ===== Ref群 =====
+      const containerRef  = useRef(null);
+      const modeRef       = useRef('grid');
+      const wordsRef      = useRef([]);
+      const animationRef  = useRef(null);
+      const startTimeRef  = useRef(0);
+      const penaltyRef    = useRef(0);
+
+      // ===== ラウンドログ (両モード分) =====
+      // roundLogs[gameIndex][roundIndex] = { timeMs, penaltyCount }
+      const roundLogsRef  = useRef([ [], [] ]);
+      // 各モードの合計タイム(ms)
+      const gameTotalsRef = useRef([ 0, 0 ]);
+      // 各ラウンド開始時刻
+      const roundStartRef = useRef(0);
+      // 現ラウンドのペナルティ回数
+      const roundPenaltyCountRef = useRef(0);
+
+      // ===== ローカルストレージ読み込み =====
       useEffect(() => {
-        const tsukubaScore = localStorage.getItem('highscore-筑波');
-        const ibarakiScore = localStorage.getItem('highscore-茨城');
+        const t = localStorage.getItem('highscore-筑波');
+        const i = localStorage.getItem('highscore-茨城');
         setHighScores({
-          '筑波': tsukubaScore ? parseFloat(tsukubaScore) : null,
-          '茨城': ibarakiScore ? parseFloat(ibarakiScore) : null,
+          '筑波': t ? parseFloat(t) : null,
+          '茨城': i ? parseFloat(i) : null,
         });
-        return () => {
-          cancelAnimationFrame(animationRef.current);
-          bgmSound.pause(); // アンマウント時にBGMを停止
-        };
+        return () => { cancelAnimationFrame(animationRef.current); bgmSound.pause(); };
       }, []);
 
-      const setGameStateWithRef = (newState) => {
-        setGameState(newState);
-        gameStateRef.current = newState;
-      };
+      // ===== 現在のペア取得 =====
+      const currentPair = pairOrder[currentGameIndex];
 
-      // 単語リストの生成
+      // ===== 単語生成 =====
       const generateWords = (mode, width, height, headerHeight, targetWord, dummyWord) => {
-        const newWords = [];
         const texts = Array(WORDS_COUNT - 1).fill(dummyWord).concat([targetWord]);
-        
-        // シャッフル
         for (let i = texts.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [texts[i], texts[j]] = [texts[j], texts[i]];
         }
+        if (mode === 'grid') return texts.map((text, i) => ({ text, id: i }));
 
-        if (mode === 'grid') {
-          return texts.map((text, i) => ({ text, id: i }));
-        }
-
-        const minDistance = RADIUS * 2 + 5; 
+        const newWords = [];
+        const minDistance = RADIUS * 2 + 5;
         for (let i = 0; i < WORDS_COUNT; i++) {
-          let x, y;
-          let isValid = false;
-          let attempts = 0;
-
+          let x, y, isValid = false, attempts = 0;
           while (!isValid && attempts < 500) {
             x = SAFE_MARGIN + Math.random() * (width - SAFE_MARGIN * 2);
             y = headerHeight + SAFE_MARGIN + Math.random() * (height - headerHeight - SAFE_MARGIN * 2);
-            isValid = true;
-
-            for (const existingWord of newWords) {
-              const dx = existingWord.x - x;
-              const dy = existingWord.y - y;
-              if (Math.sqrt(dx * dx + dy * dy) < minDistance) {
-                isValid = false;
-                break;
-              }
-            }
+            isValid = newWords.every(w => Math.hypot(w.x - x, w.y - y) >= minDistance);
             attempts++;
           }
-          
-          const rotate = Math.floor(Math.random() * 360); 
+          const rotate = Math.floor(Math.random() * 360);
           let vx = 0, vy = 0, vr = 0;
-          
           if (mode === 'moving') {
-            const speed = 0.8 + Math.random() * 1.5; 
+            const speed = 0.8 + Math.random() * 1.5;
             const angle = Math.random() * Math.PI * 2;
-            vx = Math.cos(angle) * speed;
-            vy = Math.sin(angle) * speed;
-            vr = (Math.random() - 0.5) * 1.0; 
+            vx = Math.cos(angle) * speed; vy = Math.sin(angle) * speed;
+            vr = (Math.random() - 0.5) * 1.0;
           }
-          
           newWords.push({ text: texts[i], id: i, x, y, rotate, vx, vy, vr });
         }
         return newWords;
       };
 
-      // 毎フレームごとの更新処理
+      // ===== アニメーションフレーム =====
       const updateFrame = () => {
-        if (gameStateRef.current !== 'playing') return;
+        if (gamePhaseRef.current !== 'playing') return;
         if (!containerRef.current) return;
 
-        const width = containerRef.current.clientWidth;
+        const width  = containerRef.current.clientWidth;
         const height = containerRef.current.clientHeight;
         const headerHeight = Math.max(height * 0.15, 80);
 
@@ -177,208 +173,222 @@
 
         if (modeRef.current === 'moving') {
           const words = wordsRef.current;
-
-          for (let i = 0; i < words.length; i++) {
-            const w = words[i];
-            w.x += w.vx;
-            w.y += w.vy;
-            w.rotate += w.vr;
-
-            if (w.x < SAFE_MARGIN) { w.x = SAFE_MARGIN; w.vx *= -1; }
-            else if (w.x > width - SAFE_MARGIN) { w.x = width - SAFE_MARGIN; w.vx *= -1; }
-            
-            if (w.y < headerHeight + SAFE_MARGIN) { w.y = headerHeight + SAFE_MARGIN; w.vy *= -1; }
-            else if (w.y > height - SAFE_MARGIN) { w.y = height - SAFE_MARGIN; w.vy *= -1; }
+          for (const w of words) {
+            w.x += w.vx; w.y += w.vy; w.rotate += w.vr;
+            if (w.x < SAFE_MARGIN)              { w.x = SAFE_MARGIN;              w.vx *= -1; }
+            else if (w.x > width - SAFE_MARGIN) { w.x = width - SAFE_MARGIN;     w.vx *= -1; }
+            if (w.y < headerHeight + SAFE_MARGIN)       { w.y = headerHeight + SAFE_MARGIN;       w.vy *= -1; }
+            else if (w.y > height - SAFE_MARGIN)        { w.y = height - SAFE_MARGIN;             w.vy *= -1; }
           }
-
           for (let i = 0; i < words.length; i++) {
             for (let j = i + 1; j < words.length; j++) {
-              const w1 = words[i];
-              const w2 = words[j];
-              const dx = w2.x - w1.x;
-              const dy = w2.y - w1.y;
-              const distance = Math.sqrt(dx * dx + dy * dy);
-              const minDist = RADIUS * 2;
-
-              if (distance < minDist && distance > 0) {
-                const overlap = minDist - distance;
-                const nx = dx / distance; 
-                const ny = dy / distance; 
-                
-                w1.x -= nx * overlap / 2;
-                w1.y -= ny * overlap / 2;
-                w2.x += nx * overlap / 2;
-                w2.y += ny * overlap / 2;
-                
-                const dvx = w1.vx - w2.vx;
-                const dvy = w1.vy - w2.vy;
-                const dotProduct = dvx * nx + dvy * ny;
-                
-                if (dotProduct > 0) continue; 
-                
-                w1.vx -= dotProduct * nx;
-                w1.vy -= dotProduct * ny;
-                w2.vx += dotProduct * nx;
-                w2.vy += dotProduct * ny;
+              const w1 = words[i], w2 = words[j];
+              const dx = w2.x - w1.x, dy = w2.y - w1.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist < RADIUS * 2 && dist > 0) {
+                const overlap = RADIUS * 2 - dist;
+                const nx = dx / dist, ny = dy / dist;
+                w1.x -= nx * overlap / 2; w1.y -= ny * overlap / 2;
+                w2.x += nx * overlap / 2; w2.y += ny * overlap / 2;
+                const dot = (w1.vx - w2.vx) * nx + (w1.vy - w2.vy) * ny;
+                if (dot > 0) continue;
+                w1.vx -= dot * nx; w1.vy -= dot * ny;
+                w2.vx += dot * nx; w2.vy += dot * ny;
               }
             }
           }
         }
-
         animationRef.current = requestAnimationFrame(updateFrame);
       };
 
-      // ゲーム開始
+      // ===== ゲーム開始（1戦目） =====
       const startGame = () => {
         if (!containerRef.current) return;
-        const width = containerRef.current.clientWidth;
+
+        // ペアをシャッフルし直す
+        const shuffled = Math.random() < 0.5 ? [...GAME_PAIRS] : [GAME_PAIRS[1], GAME_PAIRS[0]];
+        setPairOrder(shuffled);
+        setCurrentGameIndex(0);
+        roundLogsRef.current  = [[], []];
+        gameTotalsRef.current = [0, 0];
+
+        startSingleGame(0, shuffled);
+      };
+
+      // ===== 1ゲーム（モード）開始 =====
+      const startSingleGame = (gameIdx, pairs) => {
+        if (!containerRef.current) return;
+        const pair = (pairs || pairOrder)[gameIdx];
+        const width  = containerRef.current.clientWidth;
         const height = containerRef.current.clientHeight;
         const headerHeight = Math.max(height * 0.15, 80);
 
-        modeRef.current = 'grid';
-        wordsRef.current = generateWords('grid', width, height, headerHeight, currentPair.target, currentPair.dummy);
-        
-        setGameStateWithRef('playing');
+        modeRef.current   = 'grid';
+        wordsRef.current  = generateWords('grid', width, height, headerHeight, pair.target, pair.dummy);
+
         setCurrentRound(0);
         setTime(0);
         setErrorId(null);
-        setSuccessId(null); // 初期化
-        setIsNewRecord(false);
-        setPlayerName('');
-        setSubmitStatus('idle');
-        penaltyRef.current = 0;
-        startTimeRef.current = Date.now();
+        setSuccessId(null);
+        penaltyRef.current            = 0;
+        roundPenaltyCountRef.current  = 0;
+        startTimeRef.current          = Date.now();
+        roundStartRef.current         = Date.now();
 
-        // BGMを再生
         bgmSound.currentTime = 0;
-        bgmSound.play().catch(e => console.log('Audio play failed:', e));
+        bgmSound.play().catch(() => {});
 
         if (animationRef.current) cancelAnimationFrame(animationRef.current);
+        setPhase('playing');
         animationRef.current = requestAnimationFrame(updateFrame);
       };
 
-      // ラウンド進行
+      // ===== ラウンド進行 =====
       const advanceRound = () => {
         const nextRound = currentRound + 1;
-        
+
+        // 現ラウンドのタイムを記録
+        const roundTimeMs = Date.now() - roundStartRef.current;
+        const log = { timeMs: roundTimeMs, penaltyCount: roundPenaltyCountRef.current };
+        roundLogsRef.current[currentGameIndex] = [...(roundLogsRef.current[currentGameIndex] || []), log];
+        roundPenaltyCountRef.current = 0;
+
         if (nextRound >= TOTAL_ROUNDS) {
-          // 15ラウンド完了：クリア
-          bgmSound.pause(); // BGM停止
-          
+          // このモード終了
+          bgmSound.pause();
           const finalTimeMs = Date.now() - startTimeRef.current + penaltyRef.current;
           setTime(finalTimeMs);
-          setGameStateWithRef('result');
-          cancelAnimationFrame(animationRef.current);
-          
-          // ハイスコア判定
-          const finalTimeSec = finalTimeMs / 1000;
-          const currentHighScore = highScores[currentPair.target];
+          gameTotalsRef.current[currentGameIndex] = finalTimeMs;
 
+          // ハイスコア判定
+          const finalTimeSec     = finalTimeMs / 1000;
+          const currentHighScore = highScores[currentPair.target];
           if (currentHighScore === null || finalTimeSec < currentHighScore) {
             setHighScores(prev => ({ ...prev, [currentPair.target]: finalTimeSec }));
-            setIsNewRecord(true);
             localStorage.setItem(`highscore-${currentPair.target}`, finalTimeSec.toString());
           }
+
+          cancelAnimationFrame(animationRef.current);
+
+          if (currentGameIndex === 0) {
+            // 1戦目終了 → インターミッション
+            setPhase('between');
+          } else {
+            // 2戦目終了 → 最終リザルト
+            setPhase('result');
+          }
         } else {
+          // 次ラウンドへ
           setCurrentRound(nextRound);
-          
+          roundStartRef.current = Date.now();
+
           let nextMode = 'grid';
           if (nextRound >= 5 && nextRound < 10) nextMode = 'random';
-          else if (nextRound >= 10) nextMode = 'moving';
-          
+          else if (nextRound >= 10)             nextMode = 'moving';
           modeRef.current = nextMode;
 
-          const width = containerRef.current.clientWidth;
+          const width  = containerRef.current.clientWidth;
           const height = containerRef.current.clientHeight;
           const headerHeight = Math.max(height * 0.15, 80);
-
           wordsRef.current = generateWords(nextMode, width, height, headerHeight, currentPair.target, currentPair.dummy);
           setErrorId(null);
         }
       };
 
-      // 単語タップ時の処理
+      // ===== 2戦目開始（インターミッション → playing） =====
+      const startSecondGame = () => {
+        setCurrentGameIndex(1);
+        startSingleGame(1, pairOrder);
+      };
+
+      // ===== ワードタップ =====
       const handleWordClick = (word) => {
-        if (gameStateRef.current !== 'playing') return;
-        if (successId !== null) return; // 正解演出中は他のタップを無効化
+        if (gamePhaseRef.current !== 'playing') return;
+        if (successId !== null) return;
 
         if (word.text === currentPair.target) {
-          // 正解音を再生
-          okSound.currentTime = 0;
-          okSound.play().catch(e => console.log('Audio play failed:', e));
-
-          // 正解の時は緑色にするためのステートをセットし、0.3秒後に次へ進む
+          okSound.currentTime = 0; okSound.play().catch(() => {});
           setSuccessId(word.id);
-          setTimeout(() => {
-            setSuccessId(null);
-            advanceRound();
-          }, 300);
+          setTimeout(() => { setSuccessId(null); advanceRound(); }, 300);
         } else {
-          // 不正解音を再生
-          noSound.currentTime = 0;
-          noSound.play().catch(e => console.log('Audio play failed:', e));
-
+          noSound.currentTime = 0; noSound.play().catch(() => {});
           penaltyRef.current += PENALTY_MS;
+          roundPenaltyCountRef.current += 1;
           setErrorId(word.id);
           setTime(Date.now() - startTimeRef.current + penaltyRef.current);
           setTimeout(() => setErrorId(null), 300);
         }
       };
 
-      // スコア送信
+      // ===== スコア送信 =====
       const submitScore = async () => {
         const name = playerName.trim();
         if (!name) return;
         setSubmitStatus('sending');
 
-        const finalTimeSec = (time / 1000).toFixed(2);
-        const penaltySec = (penaltyRef.current / 1000).toFixed(2);
         const params = new URLSearchParams();
         params.append('playerName', name);
-        params.append('mode', currentPair.target + 'モード');
-        params.append('totalTime', finalTimeSec);
-        params.append('penalty', penaltySec);
-        params.append('isNewRecord', isNewRecord ? 'YES' : 'NO');
         params.append('submittedAt', new Date().toISOString());
+
+        // 両モード分のデータ
+        pairOrder.forEach((pair, gi) => {
+          const prefix    = `g${gi + 1}`;
+          const totalMs   = gameTotalsRef.current[gi];
+          const logs      = roundLogsRef.current[gi] || [];
+          const totalPenaltyCount = logs.reduce((s, l) => s + l.penaltyCount, 0);
+          const penaltySec        = (totalPenaltyCount * PENALTY_MS / 1000).toFixed(2);
+
+          params.append(`${prefix}_mode`,         pair.target + 'モード');
+          params.append(`${prefix}_totalTime`,    (totalMs / 1000).toFixed(2));
+          params.append(`${prefix}_penalty`,      penaltySec);
+          params.append(`${prefix}_penaltyCount`, totalPenaltyCount);
+
+          // 各ラウンドのタイム・ペナルティ回数
+          logs.forEach((log, ri) => {
+            params.append(`${prefix}_r${ri + 1}_time`,    (log.timeMs / 1000).toFixed(3));
+            params.append(`${prefix}_r${ri + 1}_penalty`, log.penaltyCount);
+          });
+        });
 
         try {
           await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', body: params });
           setSubmitStatus('done');
-          setTimeout(() => returnToTitle(), 1500);
-        } catch (e) {
+          setTimeout(() => restartAll(), 1500);
+        } catch {
           setSubmitStatus('error');
           setTimeout(() => setSubmitStatus('idle'), 2000);
         }
       };
 
-      // タイトルへ戻る処理（新しいゲームをランダム抽選）
-      const returnToTitle = () => {
-        setCurrentPair(getRandomPair());
-        setGameStateWithRef('start');
+      // ===== 全リセット =====
+      const restartAll = () => {
+        setPlayerName('');
+        setSubmitStatus('idle');
+        setCurrentGameIndex(0);
+        setPhase('start');
       };
 
-      const formatTime = (ms) => {
-        return (ms / 1000).toFixed(2);
-      };
+      const formatTime = (ms) => (ms / 1000).toFixed(2);
 
-      const getStageInfo = () => {
-        if (currentRound < 5) return { label: '整列', stage: 1, current: currentRound + 1 };
-        if (currentRound < 10) return { label: 'ランダム', stage: 2, current: currentRound - 4 };
-        return { label: '動く', stage: 3, current: currentRound - 9 };
-      };
+      const getStageInfo = () => getDisplayMode(currentRound);
 
-      const activeHighScore = highScores[currentPair.target];
+      // ===== リザルト計算 =====
+      const totalBothMs = gameTotalsRef.current[0] + gameTotalsRef.current[1];
 
+      // ===== UI =====
       return (
-        <div 
-          ref={containerRef}
-          className="relative w-full h-screen bg-slate-100 overflow-hidden font-serif flex flex-col"
-        >
-          {/* --- ヘッダー領域 --- */}
-          {gameState === 'playing' && (
+        <div ref={containerRef} className="relative w-full h-screen bg-slate-100 overflow-hidden font-serif flex flex-col">
+
+          {/* ヘッダー (playing中のみ) */}
+          {gamePhase === 'playing' && (
             <div className="absolute top-0 left-0 w-full h-[15%] min-h-[80px] p-4 flex justify-between items-center z-20 bg-white/70 backdrop-blur-md border-b border-slate-200 shadow-sm pointer-events-none">
               <div className="flex flex-col">
-                <h1 className="text-xl font-bold text-slate-700 tracking-widest font-sans">{currentPair.target}を探せ</h1>
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold text-white font-sans ${currentGameIndex === 0 ? 'bg-indigo-500' : 'bg-emerald-500'}`}>
+                    {currentGameIndex === 0 ? '1戦目' : '2戦目'}
+                  </span>
+                  <h1 className="text-xl font-bold text-slate-700 tracking-widest font-sans">{currentPair.target}を探せ</h1>
+                </div>
                 <div className="flex items-center space-x-2 mt-1">
                   <span className={`px-2 py-0.5 rounded text-xs font-bold text-white font-sans ${
                     modeRef.current === 'grid' ? 'bg-blue-500' :
@@ -397,117 +407,123 @@
             </div>
           )}
 
-          {/* --- プレイ画面 --- */}
-          {gameState === 'playing' && (
+          {/* プレイ画面 */}
+          {gamePhase === 'playing' && (
             <div className="flex-grow relative w-full h-full z-10 pt-[15%]">
               {modeRef.current === 'grid' && (
                 <div className="h-full flex items-center justify-center p-4">
                   <div className="grid grid-cols-2 gap-3 w-full max-w-md">
                     {wordsRef.current.map((word) => (
-                      <button
-                        key={word.id}
-                        onClick={() => handleWordClick(word)}
-                        className={`
-                          p-6 rounded-xl text-3xl md:text-4xl font-black shadow-sm border-2 
-                          transition-transform active:scale-95 flex items-center justify-center
-                          ${errorId === word.id 
-                            ? 'bg-red-500 border-red-600 text-white animate-shake' 
-                            : successId === word.id
-                              ? 'bg-green-500 border-green-600 text-white scale-105'
-                              : 'bg-white border-slate-200 text-slate-800'}
-                        `}
-                      >
+                      <button key={word.id} onClick={() => handleWordClick(word)}
+                        className={`p-6 rounded-xl text-3xl md:text-4xl font-black shadow-sm border-2 transition-transform active:scale-95 flex items-center justify-center
+                          ${errorId === word.id ? 'bg-red-500 border-red-600 text-white animate-shake'
+                          : successId === word.id ? 'bg-green-500 border-green-600 text-white scale-105'
+                          : 'bg-white border-slate-200 text-slate-800'}`}>
                         {word.text}
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-
               {(modeRef.current === 'random' || modeRef.current === 'moving') && wordsRef.current.map((word) => (
-                <button
-                  key={word.id}
-                  onClick={() => handleWordClick(word)}
-                  className={`
-                    absolute flex items-center justify-center text-4xl md:text-5xl font-black cursor-pointer select-none transition-transform duration-150
-                    ${errorId === word.id 
-                      ? 'text-red-600 scale-110' 
-                      : successId === word.id
-                        ? 'text-green-500 scale-110'
-                        : 'text-slate-800 hover:scale-105'}
-                  `}
-                  style={{
-                    left: `${word.x - RADIUS}px`,
-                    top: `${word.y - RADIUS}px`,
-                    width: `${RADIUS * 2}px`,
-                    height: `${RADIUS * 2}px`,
-                    transform: `rotate(${word.rotate}deg)`,
-                    WebkitTapHighlightColor: 'transparent'
-                  }}
-                >
+                <button key={word.id} onClick={() => handleWordClick(word)}
+                  className={`absolute flex items-center justify-center text-4xl md:text-5xl font-black cursor-pointer select-none transition-transform duration-150
+                    ${errorId === word.id ? 'text-red-600 scale-110'
+                    : successId === word.id ? 'text-green-500 scale-110'
+                    : 'text-slate-800 hover:scale-105'}`}
+                  style={{ left: `${word.x - RADIUS}px`, top: `${word.y - RADIUS}px`, width: `${RADIUS * 2}px`, height: `${RADIUS * 2}px`, transform: `rotate(${word.rotate}deg)`, WebkitTapHighlightColor: 'transparent' }}>
                   {word.text}
                 </button>
               ))}
             </div>
           )}
 
-          {/* --- スタート・結果 モーダル --- */}
-          {gameState !== 'playing' && (
+          {/* モーダル (start / between / result) */}
+          {gamePhase !== 'playing' && (
             <div className="absolute inset-0 z-30 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-              <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full text-center">
-                
-                <h1 className="text-3xl font-black mb-2 text-indigo-900 tracking-widest font-sans">
-                  {currentPair.target}を探せ！
-                </h1>
-                <p className="text-indigo-600 font-bold mb-6 tracking-wide">総合タイムアタック</p>
+              <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-md w-full text-center max-h-[90vh] overflow-y-auto">
 
-                {gameState === 'start' ? (
+                {/* ===== スタート画面 ===== */}
+                {gamePhase === 'start' && (
                   <div className="space-y-6 font-sans">
-                    <div className="text-slate-600 text-left bg-slate-50 p-4 rounded-xl text-sm space-y-2 border border-slate-100">
-                      <p className="font-bold flex justify-between"><span>STAGE 1: 整列</span><span>5回</span></p>
-                      <p className="font-bold flex justify-between text-purple-700"><span>STAGE 2: ランダム配置</span><span>5回</span></p>
-                      <p className="font-bold flex justify-between text-rose-600"><span>STAGE 3: フワフワ動く</span><span>5回</span></p>
-                      <hr className="my-2" />
-                      <p className="text-center font-black text-slate-800 pt-1">全15回の合計タイムを競え！</p>
-                      <p className="text-center text-xs text-slate-500 mt-1">※9個の「{currentPair.dummy}」から1つの「{currentPair.target}」を探します</p>
+                    <div>
+                      <h1 className="text-3xl font-black mb-1 text-indigo-900 tracking-widest">筑波 ＆ 茨城</h1>
+                      <p className="text-indigo-600 font-bold tracking-wide">ダブル総合タイムアタック</p>
                     </div>
-
-                    {activeHighScore !== null && (
-                      <div className="flex flex-col items-center justify-center p-3 bg-yellow-50 rounded-lg text-yellow-800 border border-yellow-200">
-                        <span className="text-xs font-bold mb-1">現在の自己ベスト ({currentPair.target})</span>
-                        <span className="text-2xl font-black font-mono">{activeHighScore.toFixed(2)}<span className="text-sm ml-1">秒</span></span>
-                      </div>
-                    )}
-
-                    <button
-                      onClick={startGame}
-                      className="mt-4 px-10 py-4 bg-indigo-600 text-white rounded-full font-bold text-xl shadow-lg hover:bg-indigo-700 active:scale-95 transition-transform w-full"
-                    >
-                      ゲームスタート
+                    <div className="text-slate-600 text-left bg-slate-50 p-4 rounded-xl text-sm space-y-2 border border-slate-100">
+                      <p className="font-bold text-slate-700">【ルール】</p>
+                      <p>・筑波モード・茨城モードを連続でプレイ</p>
+                      <p>・各モード：STAGE1(整列)×5 → STAGE2(ランダム)×5 → STAGE3(動く)×5</p>
+                      <p>・お手つき：+1秒ペナルティ</p>
+                      <p>・全30ラウンドの合計タイムを競え！</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['筑波', '茨城'].map(k => (
+                        <div key={k} className="bg-yellow-50 rounded-xl p-3 border border-yellow-200">
+                          <p className="text-xs font-bold text-yellow-700 mb-1">{k}ベスト</p>
+                          <p className="text-xl font-black font-mono text-yellow-900">
+                            {highScores[k] !== null ? `${highScores[k].toFixed(2)}秒` : '---'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={startGame}
+                      className="w-full py-4 bg-indigo-600 text-white rounded-full font-bold text-xl shadow-lg hover:bg-indigo-700 active:scale-95 transition-transform">
+                      スタート！
                     </button>
                   </div>
-                ) : (
+                )}
+
+                {/* ===== インターミッション ===== */}
+                {gamePhase === 'between' && (
                   <div className="space-y-5 font-sans animate-fade-in-up">
-                    
-                    {isNewRecord && (
-                      <div className="inline-block px-4 py-1 bg-red-500 text-white rounded-full font-bold text-sm mb-2 animate-bounce">
-                        🎉 NEW RECORD! 🎉
-                      </div>
-                    )}
-                    <div className="text-3xl font-black text-emerald-500 tracking-wider">
-                      全ステージクリア！
+                    <div className="inline-block px-4 py-1 bg-indigo-500 text-white rounded-full font-bold text-sm">
+                      1戦目クリア！
                     </div>
-                    
-                    <div className="bg-slate-50 rounded-2xl p-6 border-2 border-slate-100">
-                      <p className="text-slate-500 mb-2 font-bold">合計クリアタイム</p>
-                      <p className={`text-5xl font-mono font-black mb-2 ${isNewRecord ? 'text-red-500' : 'text-indigo-900'}`}>
-                        {formatTime(time)}<span className="text-2xl ml-1 text-slate-500">秒</span>
+                    <h2 className="text-2xl font-black text-indigo-900">{pairOrder[0].target}モード 終了</h2>
+                    <div className="bg-slate-50 rounded-2xl p-4 border-2 border-slate-100">
+                      <p className="text-slate-500 text-sm font-bold mb-1">クリアタイム</p>
+                      <p className="text-4xl font-mono font-black text-indigo-700">
+                        {formatTime(gameTotalsRef.current[0])}<span className="text-lg ml-1 text-slate-500">秒</span>
                       </p>
-                      {penaltyRef.current > 0 && (
-                        <p className="text-sm text-red-500 font-bold">
-                          (お手つきペナルティ: +{formatTime(penaltyRef.current)}秒)
-                        </p>
-                      )}
+                    </div>
+                    <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-200">
+                      <p className="text-emerald-700 font-bold text-sm mb-1">次は…</p>
+                      <p className="text-2xl font-black text-emerald-800">{pairOrder[1].target}モード</p>
+                    </div>
+                    <button onClick={startSecondGame}
+                      className="w-full py-4 bg-emerald-600 text-white rounded-full font-bold text-xl shadow-lg hover:bg-emerald-700 active:scale-95 transition-transform">
+                      2戦目スタート！
+                    </button>
+                  </div>
+                )}
+
+                {/* ===== 最終リザルト ===== */}
+                {gamePhase === 'result' && (
+                  <div className="space-y-4 font-sans animate-fade-in-up">
+                    <div className="text-2xl font-black text-emerald-500 tracking-wider">全30ステージクリア！🎉</div>
+
+                    {/* 両モードのスコア */}
+                    <div className="grid grid-cols-2 gap-2">
+                      {pairOrder.map((pair, gi) => {
+                        const logs = roundLogsRef.current[gi] || [];
+                        const totalPenalty = logs.reduce((s, l) => s + l.penaltyCount, 0);
+                        return (
+                          <div key={gi} className={`rounded-xl p-3 border-2 text-left ${gi === 0 ? 'bg-indigo-50 border-indigo-200' : 'bg-emerald-50 border-emerald-200'}`}>
+                            <p className={`text-xs font-bold mb-1 ${gi === 0 ? 'text-indigo-500' : 'text-emerald-600'}`}>{pair.target}モード</p>
+                            <p className="text-2xl font-black font-mono text-slate-800">{formatTime(gameTotalsRef.current[gi])}<span className="text-xs ml-1 text-slate-500">秒</span></p>
+                            {totalPenalty > 0 && <p className="text-xs text-red-500 font-bold mt-1">お手つき {totalPenalty}回</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* 合計 */}
+                    <div className="bg-slate-50 rounded-2xl p-4 border-2 border-slate-200">
+                      <p className="text-slate-500 text-sm font-bold mb-1">合計タイム</p>
+                      <p className="text-4xl font-mono font-black text-indigo-900">
+                        {formatTime(totalBothMs)}<span className="text-lg ml-1 text-slate-500">秒</span>
+                      </p>
                     </div>
 
                     {/* ネームエントリー */}
@@ -525,33 +541,29 @@
                     </div>
 
                     {/* 送信ボタン */}
-                    <button
-                      onClick={submitScore}
+                    <button onClick={submitScore}
                       disabled={!playerName.trim() || submitStatus === 'sending' || submitStatus === 'done'}
                       className={`w-full py-4 rounded-full font-bold text-lg shadow-lg transition-all active:scale-95
-                        ${submitStatus === 'done' ? 'bg-green-500 text-white' :
-                          submitStatus === 'error' ? 'bg-red-500 text-white' :
+                        ${submitStatus === 'done'    ? 'bg-green-500 text-white' :
+                          submitStatus === 'error'   ? 'bg-red-500 text-white' :
                           submitStatus === 'sending' ? 'bg-indigo-300 text-white cursor-wait' :
-                          !playerName.trim() ? 'bg-slate-200 text-slate-400 cursor-not-allowed' :
-                          'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                    >
-                      {submitStatus === 'done' ? '✓ 送信完了！' :
-                       submitStatus === 'error' ? '⚠ 送信失敗（再試行）' :
+                          !playerName.trim()         ? 'bg-slate-200 text-slate-400 cursor-not-allowed' :
+                                                       'bg-indigo-600 text-white hover:bg-indigo-700'}`}>
+                      {submitStatus === 'done'    ? '✓ 送信完了！' :
+                       submitStatus === 'error'   ? '⚠ 送信失敗（再試行）' :
                        submitStatus === 'sending' ? '送信中...' : 'スコア送信'}
                     </button>
 
-                    <button
-                      onClick={returnToTitle}
-                      className="w-full py-4 bg-slate-100 text-slate-500 rounded-full font-bold text-lg hover:bg-slate-200 active:scale-95 transition-all border border-slate-200"
-                    >
-                      次のゲームへ（ランダム）
+                    <button onClick={restartAll}
+                      className="w-full py-3 bg-slate-100 text-slate-500 rounded-full font-bold text-base hover:bg-slate-200 active:scale-95 transition-all border border-slate-200">
+                      送信せずに戻る
                     </button>
                   </div>
                 )}
+
               </div>
             </div>
           )}
-
         </div>
       );
     }
