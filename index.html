@@ -349,7 +349,8 @@
             params.append(`${prefix}_r${ri + 1}_penalty`, log.penaltyCount);
           });
         });
-
+console.log('送信URL:', APPS_SCRIPT_URL);
+console.log('送信データ:', params.toString());
         try {
           await fetch(APPS_SCRIPT_URL, { method: 'POST', mode: 'no-cors', body: params });
           setSubmitStatus('done');
